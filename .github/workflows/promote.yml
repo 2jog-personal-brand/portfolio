@@ -25,7 +25,7 @@ env:
 jobs:
   promote:
     name: Promote healthy staging digest
-    runs-on: [self-hosted, linux, ARM64, personal-brand]
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     environment: production
     steps:

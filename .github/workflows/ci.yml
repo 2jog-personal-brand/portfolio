@@ -28,7 +28,7 @@ env:
 
 jobs:
   verify:
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || fromJSON('["self-hosted","linux","ARM64","personal-brand"]') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 65
     steps:
       - name: Check out source
@@ -217,7 +217,7 @@ jobs:
     name: Publish immutable verified image
     needs: verify
     if: github.actor_id == '81255678' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, linux, ARM64, personal-brand]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       actions: read
@@ -298,7 +298,7 @@ jobs:
     name: Deploy staging and run live browser E2E
     needs: publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, ARM64, personal-brand]
+    runs-on: ubuntu-24.04
     timeout-minutes: 50
     environment: staging
     permissions:
