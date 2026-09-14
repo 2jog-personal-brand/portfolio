@@ -5,7 +5,7 @@ skill, provider, or live-resource inventory.
 
 - [Source map](Sources)
 - [Local agent rules](../AGENTS.md)
-- [Portfolio repository](https://github.com/matt2jog/portfolio)
+- [Portfolio repository](https://github.com/2jog-personal-brand/portfolio)
 
 Portfolio owns its public experience and Portfolio-specific data. Canonical
 career data is read-only; Admin owns full career CRUD.
