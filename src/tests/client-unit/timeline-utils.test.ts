@@ -44,6 +44,8 @@ test("palette and date parsing cover compact, alpha, current, named, ISO, and fa
   assert.deepEqual(parseDate("2024"), { year: 2024, month: 0 });
   assert.deepEqual(parseDate("February 2023"), { year: 2023, month: 1 });
   assert.deepEqual(parseDate("2022-07-15"), { year: 2022, month: 6 });
+  assert.deepEqual(parseDate("Smarch 2024"), { year: 2024, month: 0 });
+  assert.deepEqual(parseDate("January nope"), { year: now.getFullYear(), month: 0 });
   assert.deepEqual(parseDate("not-a-date"), { year: now.getFullYear(), month: 0 });
 });
 
