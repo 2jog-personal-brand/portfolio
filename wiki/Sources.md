@@ -15,6 +15,6 @@
 | Release standard, when parent exists | [`CI_CD.md`](../../../CI_CD.md) |
 
 When Admin or the workspace is absent, use the
-[Admin repository](https://github.com/matt2jog/admin_dashboard) and
-[workspace repository](https://github.com/matt2jog/personal_brand_workspace) as
+[Admin repository](https://github.com/2jog-personal-brand/admin_dashboard) and
+[workspace repository](https://github.com/2jog-personal-brand/personal_brand_workspace) as
 remote entry points. Use live state and refreshed plans for deployed reality.

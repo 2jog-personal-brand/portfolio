@@ -33,11 +33,11 @@ test("public GitHub activity works through REST without a production token", asy
     if (url.includes("/repos?")) {
       return Response.json([{
         name: "portfolio",
-        full_name: "matt2jog/portfolio",
+        full_name: "2jog-personal-brand/portfolio",
         description: "Portfolio",
         stargazers_count: 2,
         language: "TypeScript",
-        html_url: "https://github.com/matt2jog/portfolio",
+        html_url: "https://github.com/2jog-personal-brand/portfolio",
         created_at: "2026-01-01T00:00:00Z",
         updated_at: "2026-07-01T00:00:00Z",
         pushed_at: "2026-07-01T00:00:00Z",
@@ -48,13 +48,13 @@ test("public GitHub activity works through REST without a production token", asy
         id: "event-1",
         type: "PullRequestEvent",
         created_at: "2026-07-02T00:00:00Z",
-        repo: { name: "matt2jog/portfolio" },
+        repo: { name: "2jog-personal-brand/portfolio" },
         payload: {
           action: "opened",
           pull_request: {
             title: "Improve activity",
             state: "open",
-            html_url: "https://github.com/matt2jog/portfolio/pull/1",
+            html_url: "https://github.com/2jog-personal-brand/portfolio/pull/1",
             created_at: "2026-07-02T00:00:00Z",
             merged_at: null,
             closed_at: null,

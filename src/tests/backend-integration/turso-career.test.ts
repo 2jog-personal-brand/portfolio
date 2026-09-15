@@ -93,7 +93,7 @@ test("Portfolio reads career rows and can append GitHub activity", async () => {
     extId: "event-1",
     type: "PushEvent",
     title: "Commit",
-    repo: "matt2jog/portfolio",
+    repo: "2jog-personal-brand/portfolio",
     timestamp: new Date("2026-01-02T03:04:05Z"),
     meta: {},
   }).onConflictDoNothing({ target: githubTimelineEvents.extId });
