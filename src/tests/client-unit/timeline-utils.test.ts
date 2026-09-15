@@ -76,6 +76,34 @@ test("backbone construction handles empty, single-date, boundary-month, covered,
   assert.equal(short.backbone.some(({ type }) => type === "ellipsis"), false);
 });
 
+test("backbone bounds same-year ranges and malformed reversed dates deterministically", () => {
+  const currentYear = new Date().getFullYear();
+  const sameYear = buildBackbone([
+    experience("late", `June ${currentYear} - July ${currentYear}`),
+    experience("wide", `January ${currentYear} - December ${currentYear}`),
+  ]);
+
+  assert.deepEqual(
+    sameYear.parsedExps.map(({ id }) => id).sort(),
+    ["late", "wide"],
+  );
+
+  const earlierThisYear = buildBackbone([
+    experience("earlier", `January ${currentYear} - February ${currentYear}`),
+  ]);
+  assert.ok(earlierThisYear.backbone.some(
+    ({ type, year, month }) => type === "month" && year === currentYear && month === new Date().getMonth(),
+  ));
+
+  const reversed = buildBackbone([
+    experience("reversed", `December ${currentYear + 4} - January ${currentYear - 6}`),
+  ]);
+  assert.deepEqual(
+    reversed.parsedExps.map(({ startIndex, endIndex }) => ({ startIndex, endIndex })),
+    [{ startIndex: -1, endIndex: 0 }],
+  );
+});
+
 test("side assignment uses preferred, alternate, and least-occupied sides", () => {
   const sides = assignSides([
     parsed("a", 0, 10),
@@ -84,6 +112,14 @@ test("side assignment uses preferred, alternate, and least-occupied sides", () =
     parsed("d", 5, 30),
   ]);
   assert.deepEqual(sides, ["left", "right", "right", "left"]);
+  assert.deepEqual(
+    assignSides([
+      parsed("long-left", 0, 10),
+      parsed("short-right", 0, 0),
+      parsed("forced-right", 0, 20),
+    ]),
+    ["left", "right", "right"],
+  );
 });
 
 test("depth assignment expires old intervals and stacks overlaps independently per side", () => {
