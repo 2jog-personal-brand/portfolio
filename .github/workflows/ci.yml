@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  DOCKER_BUILD_RECORD_RETENTION_DAYS: "1"
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
   GCP_PROJECT_ID: personal-brand-501801
   GCP_REGION: us-east4
   COMMIT_SHA: ${{ github.sha }}
@@ -107,6 +107,7 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
+          package-manager-cache: false
 
       - name: Install locked dependencies
         run: |
@@ -132,9 +133,12 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
         with:
           platforms: amd64
+          cache-image: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          cache-binary: false
 
       - name: Build exact production image once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -201,11 +205,11 @@ jobs:
           exit-code: "1"
 
       - name: Save the verified image
-        if: github.actor_id == '81255678' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker save --output "${RUNNER_TEMP}/portfolio-image.tar" "${LOCAL_IMAGE}"
 
       - name: Hand the verified image to the trusted job
-        if: github.actor_id == '81255678' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: portfolio-image-${{ env.COMMIT_SHA }}
@@ -217,11 +221,11 @@ jobs:
   publish:
     name: Publish immutable verified image
     needs: verify
-    if: github.actor_id == '81255678' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      actions: read
+      actions: write
       id-token: write
     outputs:
       digest_uri: ${{ steps.image.outputs.digest_uri }}
@@ -294,6 +298,25 @@ jobs:
             --format='value(image_summary.digest)')"
           [[ "${resolved_digest}" == "${digest}" ]]
           echo "digest_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Delete the temporary image handoff
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: portfolio-image-${{ env.COMMIT_SHA }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t artifact_ids < <(
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
+          )
+          if [[ "${#artifact_ids[@]}" -ne 1 ]]; then
+            echo "::error::Expected exactly one temporary ${ARTIFACT_NAME} artifact, found ${#artifact_ids[@]}."
+            exit 1
+          fi
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_ids[0]}"
 
   stage:
     name: Deploy staging and run live browser E2E
@@ -403,6 +426,7 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
+          package-manager-cache: false
 
       - name: Run tagged candidate endpoint gate
         shell: bash
