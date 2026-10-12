@@ -44,6 +44,9 @@ Publication independently reads the exact registry manifest and configuration,
 binding the reviewed Docker29 scanned-image descriptor to its immutable digest,
 OCI source and runtime SHA without downloading a second complete image. A missing
 descriptor or a different engine image-ID model fails closed.
+Production promotion requires Ready/reconciled traffic explicitly pinned to the
+actual serving revision and an available rollback image. A failed routing update
+must be repaired separately; do not inherit an invalid desired traffic target.
 
 ## Apply platform guardrails
 

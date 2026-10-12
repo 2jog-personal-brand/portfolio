@@ -2,6 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+
+test('production desired traffic is ready and pinned to the actual serving rollback revision', () => {
+  const workflow = readFileSync(new URL('../workflows/promote.yml', import.meta.url), 'utf8');
+  const guard = workflow.indexOf('jq -e --arg revision "${previous_revision}"');
+  const mutation = workflow.indexOf('labels_touched=1');
+  assert.ok(guard > 0 && guard < mutation);
+  const preflight = workflow.slice(guard, mutation);
+  assert.ok(preflight.includes('.status.observedGeneration'));
+  assert.ok(preflight.includes('.type == "Ready" and .status == "True"'));
+  assert.ok(preflight.includes('.[0].revisionName == $revision'));
+  assert.ok(preflight.includes('.[0].latestRevision != true'));
+  assert.ok(preflight.includes('.status.traffic | length == 1 and .[0].tag == null'));
+  assert.match(workflow, /timeout-minutes: 70/);
+});
 test('production verifies an available exact rollback image before any mutation', () => {
   const workflow = readFileSync(new URL('../workflows/promote.yml', import.meta.url), 'utf8');
   const guard = workflow.indexOf('previous_digest="$(gcloud artifacts docker images describe');
