@@ -13,7 +13,9 @@ function githubHeaders(token?: string): HeadersInit {
 }
 
 async function fetchGithubJson<T>(path: string, token?: string): Promise<T> {
-  const response = await fetch(`${GITHUB_API}${path}`, { headers: githubHeaders(token) });
+  const response = await fetch(`${GITHUB_API}${path}`, {
+    headers: githubHeaders(token), redirect: "error", signal: AbortSignal.timeout(20000),
+  });
   if (!response.ok) {
     throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
   }
@@ -62,7 +64,8 @@ type RestGithubEvent = {
 };
 
 export async function fetchGithubActivity(username: string, token?: string) {
-  if (!token) {
+  // Public output never inherits a token's private repository/PR visibility.
+  // Keep the real contribution calendar on its separate minimal query.
     const encodedUsername = encodeURIComponent(username);
     const [user, repositories, events] = await Promise.all([
       fetchGithubJson<RestGithubUser>(`/users/${encodedUsername}`),
@@ -88,7 +91,7 @@ export async function fetchGithubActivity(username: string, token?: string) {
         };
       });
 
-    return {
+    const activity = {
       login: user.login,
       name: user.name,
       avatarUrl: user.avatar_url,
@@ -115,49 +118,17 @@ export async function fetchGithubActivity(username: string, token?: string) {
         contributionCalendar: { totalContributions: 0, weeks: [] },
       },
     };
-  }
+    if (token) {
+      activity.contributionsCollection = await fetchGithubContributionCalendar(username, token);
+    }
+    return activity;
+}
 
+async function fetchGithubContributionCalendar(username: string, token: string) {
   const query = `
     query($login: String!) {
       user(login: $login) {
         login
-        name
-        avatarUrl
-        url
-        bio
-        followers {
-          totalCount
-        }
-        repositories(first: 10, orderBy: {field: PUSHED_AT, direction: DESC}, privacy: PUBLIC) {
-          totalCount
-          nodes {
-            name
-            description
-            stargazerCount
-            primaryLanguage {
-              name
-              color
-            }
-            url
-            createdAt
-            updatedAt
-            pushedAt
-          }
-        }
-        pullRequests(first: 10, orderBy: {field: CREATED_AT, direction: DESC}) {
-          totalCount
-          nodes {
-            title
-            state
-            url
-            createdAt
-            mergedAt
-            closedAt
-            repository {
-              nameWithOwner
-            }
-          }
-        }
         contributionsCollection {
           contributionCalendar {
             totalContributions
@@ -181,24 +152,33 @@ export async function fetchGithubActivity(username: string, token?: string) {
       'User-Agent': 'Portfolio-App'
     },
     body: JSON.stringify({ query, variables: { login: username } }),
+    redirect: "error",
+    signal: AbortSignal.timeout(20000),
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`GitHub API error: ${response.statusText} - ${text}`);
+    await response.body?.cancel();
+    throw new Error(`GitHub contribution calendar unavailable: HTTP ${response.status}`);
   }
 
   const { data, errors } = await response.json();
   
-  if (errors) {
-    throw new Error(`GraphQL Errors: ${errors.map((e: any) => e.message).join(', ')}`);
+  if (errors?.length) {
+    throw new Error("GitHub contribution calendar unavailable");
   }
 
-  if (!data?.user) {
-    throw new Error("GitHub user not found.");
+  const calendar = data?.user?.contributionsCollection?.contributionCalendar;
+  if (typeof data?.user?.login !== "string" || data.user.login.toLowerCase() !== username.toLowerCase() || !calendar
+    || !Number.isInteger(calendar.totalContributions) || calendar.totalContributions < 0
+    || !Array.isArray(calendar.weeks) || calendar.weeks.length === 0
+    || calendar.weeks.some((week: any) => !Array.isArray(week.contributionDays)
+      || week.contributionDays.length === 0
+      || week.contributionDays.some((day: any) => !Number.isInteger(day.contributionCount)
+        || day.contributionCount < 0 || !/^\d{4}-\d{2}-\d{2}$/.test(day.date)))) {
+    throw new Error("GitHub contribution calendar response did not match the public contract");
   }
 
-  return data.user;
+  return { contributionCalendar: calendar };
 }
 
 let cache: { data: any, timestamp: number } | null = null;
