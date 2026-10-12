@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { URL } from 'node:url';
 test('production verifies an available exact rollback image before any mutation', () => {
   const workflow = readFileSync(new URL('../workflows/promote.yml', import.meta.url), 'utf8');
   const guard = workflow.indexOf('previous_digest="$(gcloud artifacts docker images describe');
