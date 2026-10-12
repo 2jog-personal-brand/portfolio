@@ -2,6 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
+import { execFileSync } from 'node:child_process';
+
+test('actual jq preflight rejects unreconciled, unready, mutable or tagged traffic', () => {
+  const workflow = readFileSync(new URL('../workflows/promote.yml', import.meta.url), 'utf8');
+  const filter = workflow.match(/jq -e --arg revision[^\r\n]+'\r?\n([\s\S]*?)\r?\n\s*' <<</)?.[1];
+  assert.ok(filter);
+  const revision = 'portfolio--prod-reviewed';
+  const fixture = () => ({metadata: {generation: 12}, status: {observedGeneration: 12,
+    conditions: [{type: 'Ready', status: 'True'}], traffic: [{revisionName: revision, percent: 100}]},
+    spec: {traffic: [{revisionName: revision, percent: 100}]}});
+  const execute = value => execFileSync('jq', ['-e', '--arg', 'revision', revision, filter],
+    {input: JSON.stringify(value), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']}).trim();
+  assert.equal(execute(fixture()), 'true');
+  for (const change of [
+    value => { value.spec.traffic[0].revisionName = 'portfolio--prod-unimportable'; },
+    value => { value.status.conditions[0].status = 'False'; },
+    value => { value.status.observedGeneration = 11; },
+    value => { value.spec.traffic[0].latestRevision = true; },
+    value => { value.status.traffic[0].tag = 'cand'; },
+  ]) {
+    const value = fixture(); change(value);
+    assert.throws(() => execute(value), error => error.status === 1);
+  }
+});
 
 test('production desired traffic is ready and pinned to the actual serving rollback revision', () => {
   const workflow = readFileSync(new URL('../workflows/promote.yml', import.meta.url), 'utf8');
