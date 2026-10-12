@@ -28,7 +28,8 @@ env:
 
 jobs:
   verify:
-    runs-on: [self-hosted, Linux, ARM64, personal-brand, linux-arm64]
+    # Public/untrusted forks never execute on the persistent private Mac runner.
+    runs-on: ${{ github.actor_id == '81255678' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","Linux","ARM64","personal-brand","linux-arm64"]') || 'ubuntu-24.04' }}
     timeout-minutes: 65
     outputs:
       verified_image_id: ${{ steps.verified-image.outputs.image_id }}
@@ -142,6 +143,7 @@ jobs:
           npm run build
 
       - name: Require Apple Rosetta translation for the Cloud Run image
+        if: runner.name == 'pb-mac-m1-bootstrap'
         shell: bash
         run: |
           set -euo pipefail
@@ -159,6 +161,7 @@ jobs:
           cache-binary: false
 
       - name: Disable BuildKit's bundled QEMU fallback
+        if: runner.name == 'pb-mac-m1-bootstrap'
         shell: bash
         env:
           BUILDER_NAME: ${{ steps.buildx.outputs.name }}
