@@ -12,7 +12,10 @@ test('trusted Mac build and promotion avoid image artifacts while forks retain h
   assert.match(ci, /docker tag "\$\{VERIFIED_IMAGE_ID\}"/);
   assert.match(ci, /PORTFOLIO_RELEASE_SHA/); assert.match(ci, /org\.opencontainers\.image\.revision/);
   assert.doesNotMatch(ci, /gh api --method DELETE/);
-  assert.match(ci, /github\.actor_id == '81255678' && \(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.head\.repo\.full_name == github\.repository\)/);
+  assert.match(ci, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && github\.actor_id == '81255678'/);
   assert.match(ci, /\|\| 'ubuntu-24\.04'/);
-  assert.match(ci, /if: runner\.name == 'pb-mac-m1-bootstrap'/);
+  assert.match(ci, /if: runner\.name == 'pb-mac-portfolio-main'/);
+  assert.match(ci, /skip-setup-trivy: \$\{\{ runner\.name == 'pb-mac-portfolio-main' \}\}/);
+  assert.match(ci, /format\('\{0\}\/trivy', runner\.temp\)/);
+  assert.match(ci + promote, /portfolio-main, linux-arm64/);
 });
