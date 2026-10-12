@@ -40,6 +40,10 @@ runtime release SHA, and publishes only that image. Do not reintroduce hosted
 image-tar artifacts or QEMU; Apple Rosetta is the reviewed amd64 build handler.
 Missing or changed local images fail closed. A multi-runner handoff requires a
 separately reviewed private transport.
+Publication independently reads the exact registry manifest and configuration,
+binding the reviewed Docker29 scanned-image descriptor to its immutable digest,
+OCI source and runtime SHA without downloading a second complete image. A missing
+descriptor or a different engine image-ID model fails closed.
 
 ## Apply platform guardrails
 

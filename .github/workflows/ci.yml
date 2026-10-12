@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify Mac runner and exact local image handoff
-        run: node --test .github/scripts/actions-local-image-handoff.test.mjs .github/scripts/release-recovery-guards.test.mjs .github/scripts/publisher-federation.test.mjs
+        run: node --test .github/scripts/actions-local-image-handoff.test.mjs .github/scripts/release-recovery-guards.test.mjs .github/scripts/publisher-federation.test.mjs .github/scripts/verify-published-manifest.test.mjs
 
       - name: Verify task-end reconciliation hook
         shell: bash
@@ -268,11 +268,17 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64, portfolio-main, linux-arm64]
     timeout-minutes: 15
     permissions:
+      contents: read
       actions: read
       id-token: write
     outputs:
       digest_uri: ${{ steps.image.outputs.digest_uri }}
     steps:
+      - name: Check out exact publication verifier source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - name: Isolate publisher credentials from other runner jobs
         shell: bash
         run: |
@@ -389,25 +395,17 @@ jobs:
           local_image_id="$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')"
           [[ "${local_image_id}" == "${VERIFIED_IMAGE_ID}" ]]
           gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
-          timeout 180s docker pull "${PUBLISHED_DIGEST_URI}" >/dev/null
-          remote_image_id="$(docker image inspect "${PUBLISHED_DIGEST_URI}" --format='{{.Id}}')"
-          if [[ "${remote_image_id}" != "${local_image_id}" ]]; then
-            echo "::error::The immutable commit tag ${COMMIT_SHA} does not match the image that passed verification."
-            exit 1
-          fi
-          remote_revision="$(docker image inspect "${PUBLISHED_DIGEST_URI}" \
-            --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
-          if [[ "${remote_revision}" != "${COMMIT_SHA}" ]]; then
-            echo "::error::The immutable commit tag ${COMMIT_SHA} does not carry its exact OCI revision label."
-            exit 1
-          fi
-          remote_release_sha="$(docker image inspect "${PUBLISHED_DIGEST_URI}" \
-            --format='{{ range .Config.Env }}{{ println . }}{{ end }}' \
-            | sed -n 's/^PORTFOLIO_RELEASE_SHA=//p')"
-          if [[ "${remote_release_sha}" != "${COMMIT_SHA}" ]]; then
-            echo "::error::The immutable commit tag ${COMMIT_SHA} does not carry its exact runtime release SHA."
-            exit 1
-          fi
+          umask 077
+          readback="${RUNNER_TEMP}/portfolio-manifest-readback"
+          mkdir -- "${readback}"
+          docker image inspect "${VERIFIED_IMAGE_ID}" --format '{{json .}}' >"${readback}/local.json"
+          timeout 60s docker buildx imagetools inspect "${PUBLISHED_DIGEST_URI}" \
+            --format '{{json .Manifest}}' >"${readback}/descriptor.json"
+          timeout 60s docker buildx imagetools inspect "${PUBLISHED_DIGEST_URI}" \
+            --format '{{json .Image}}' >"${readback}/configuration.json"
+          node .github/scripts/verify-published-manifest.mjs \
+            "${readback}/local.json" "${readback}/descriptor.json" "${readback}/configuration.json" \
+            "${VERIFIED_IMAGE_ID}" "${COMMIT_SHA}" "${PUBLISHED_DIGEST_URI}"
           resolved_digest="$(gcloud artifacts docker images describe "${remote_image}" \
             --project "${GCP_PROJECT_ID}" \
             --format='value(image_summary.digest)')"
