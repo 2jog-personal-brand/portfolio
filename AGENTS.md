@@ -31,6 +31,13 @@ GitHub Actions owns build, test, scan, and release. Parent Terraform owns durabl
 infrastructure. Do not introduce Cloud Build or use Terraform as a release runner.
 Keep staging structurally equivalent to production with isolated state/data.
 
+Build and promotion jobs use the organization Mac runner. The publisher receives
+the exact scanned Docker image ID from verification, checks its OCI revision and
+runtime release SHA, and publishes only that image. Do not reintroduce hosted
+image-tar artifacts or QEMU; Apple Rosetta is the reviewed amd64 build handler.
+Missing or changed local images fail closed. A multi-runner handoff requires a
+separately reviewed private transport.
+
 ## Apply platform guardrails
 
 Do not add brokered application messaging, split command/read models, event

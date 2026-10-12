@@ -28,13 +28,18 @@ env:
 
 jobs:
   verify:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, ARM64, personal-brand, linux-arm64]
     timeout-minutes: 65
+    outputs:
+      verified_image_id: ${{ steps.verified-image.outputs.image_id }}
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+
+      - name: Verify Mac runner and exact local image handoff
+        run: node --test .github/scripts/actions-local-image-handoff.test.mjs
 
       - name: Verify task-end reconciliation hook
         shell: bash
@@ -69,7 +74,10 @@ jobs:
       - name: Block committed secrets
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
+          skip-setup-trivy: true
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: fs
           scan-ref: .
           scanners: secret
@@ -81,7 +89,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
+          version: v0.70.0
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: fs
           scan-ref: .
           scanners: misconfig,vuln
@@ -94,7 +104,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
+          version: v0.70.0
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: fs
           scan-ref: .
           scanners: misconfig,vuln
@@ -129,16 +141,41 @@ jobs:
           npm run test:ui
           npm run build
 
-      - name: Set up QEMU for the Cloud Run image
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
-        with:
-          platforms: amd64
-          cache-image: false
+      - name: Require Apple Rosetta translation for the Cloud Run image
+        shell: bash
+        run: |
+          set -euo pipefail
+          handler=/proc/sys/fs/binfmt_misc/rosetta
+          test -r "${handler}"
+          grep -Fqx 'enabled' "${handler}"
+          test "$(grep -c '^interpreter ' "${handler}")" -eq 1
+          grep -Fqx 'interpreter /mnt/lima-rosetta/rosetta' "${handler}"
+          test ! -e /proc/sys/fs/binfmt_misc/qemu-x86_64
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           cache-binary: false
+
+      - name: Disable BuildKit's bundled QEMU fallback
+        shell: bash
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          test -n "${BUILDER_NAME}"
+          mapfile -t builder_containers < <(
+            docker ps --filter "name=buildx_buildkit_${BUILDER_NAME}" --format '{{.Names}}'
+          )
+          test "${#builder_containers[@]}" -eq 1
+          builder_container="${builder_containers[0]}"
+          [[ "${builder_container}" == "buildx_buildkit_${BUILDER_NAME}"* ]]
+          docker exec "${builder_container}" test -x /usr/bin/buildkit-qemu-x86_64
+          docker exec "${builder_container}" \
+            mv /usr/bin/buildkit-qemu-x86_64 /usr/bin/buildkit-qemu-x86_64.disabled
+          docker exec "${builder_container}" test ! -e /usr/bin/buildkit-qemu-x86_64
+          docker exec "${builder_container}" test -x /usr/bin/buildkit-qemu-x86_64.disabled
 
       - name: Build exact production image once
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -173,7 +210,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
+          version: v0.70.0
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: image
           image-ref: ${{ env.LOCAL_IMAGE }}
           scanners: vuln
@@ -185,7 +224,9 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
+          version: v0.70.0
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: image
           image-ref: ${{ env.LOCAL_IMAGE }}
           scanners: vuln
@@ -197,47 +238,47 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           skip-setup-trivy: true
+          version: v0.70.0
           cache: false
+          cache-dir: /var/cache/personal-brand/trivy
           scan-type: image
           image-ref: ${{ env.LOCAL_IMAGE }}
           scanners: secret
           format: table
           exit-code: "1"
 
-      - name: Save the verified image
+      - name: Record exact verified runner-local image ID
+        id: verified-image
         if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker save --output "${RUNNER_TEMP}/portfolio-image.tar" "${LOCAL_IMAGE}"
-
-      - name: Hand the verified image to the trusted job
-        if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: portfolio-image-${{ env.COMMIT_SHA }}
-          path: ${{ runner.temp }}/portfolio-image.tar
-          retention-days: 1
-          compression-level: 0
-          if-no-files-found: error
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')"
+          [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$(docker image inspect "${LOCAL_IMAGE}" --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')" == "${COMMIT_SHA}" ]]
+          echo "image_id=${image_id}" >> "${GITHUB_OUTPUT}"
 
   publish:
     name: Publish immutable verified image
     needs: verify
     if: github.actor_id == '81255678' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, ARM64, personal-brand, linux-arm64]
     timeout-minutes: 15
     permissions:
-      actions: write
+      actions: read
       id-token: write
     outputs:
       digest_uri: ${{ steps.image.outputs.digest_uri }}
     steps:
-      - name: Download verified image
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: portfolio-image-${{ env.COMMIT_SHA }}
-          path: ${{ runner.temp }}
-
-      - name: Load verified image
-        run: docker load --input "${RUNNER_TEMP}/portfolio-image.tar"
+      - name: Require exact verified runner-local image
+        shell: bash
+        env:
+          VERIFIED_IMAGE_ID: ${{ needs.verify.outputs.verified_image_id }}
+        run: |
+          set -euo pipefail
+          [[ "${VERIFIED_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')" == "${VERIFIED_IMAGE_ID}" ]]
+          [[ "$(docker image inspect "${LOCAL_IMAGE}" --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')" == "${COMMIT_SHA}" ]]
 
       - name: Authenticate to Artifact Registry
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
@@ -251,6 +292,8 @@ jobs:
       - name: Publish the verified SHA image
         id: image
         shell: bash
+        env:
+          VERIFIED_IMAGE_ID: ${{ needs.verify.outputs.verified_image_id }}
         run: |
           set -euo pipefail
           registry="${GCP_REGION}-docker.pkg.dev"
@@ -258,6 +301,7 @@ jobs:
           remote_image="${image_uri}:${COMMIT_SHA}"
           gcloud auth configure-docker "${registry}" --quiet
           local_image_id="$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')"
+          [[ "${local_image_id}" == "${VERIFIED_IMAGE_ID}" ]]
           [[ "${local_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
           local_revision="$(docker image inspect "${LOCAL_IMAGE}" \
             --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
@@ -267,7 +311,7 @@ jobs:
             --format='value(image_summary.digest)' 2>/dev/null)"; then
             [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           else
-            docker tag "${LOCAL_IMAGE}" "${remote_image}"
+            docker tag "${VERIFIED_IMAGE_ID}" "${remote_image}"
             docker push "${remote_image}"
             digest="$(gcloud artifacts docker images describe "${remote_image}" \
               --project "${GCP_PROJECT_ID}" \
@@ -299,30 +343,12 @@ jobs:
           [[ "${resolved_digest}" == "${digest}" ]]
           echo "digest_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Delete the temporary image handoff
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_NAME: portfolio-image-${{ env.COMMIT_SHA }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t artifact_ids < <(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-              --jq ".artifacts[] | select(.name == \"${ARTIFACT_NAME}\") | .id"
-          )
-          if [[ "${#artifact_ids[@]}" -ne 1 ]]; then
-            echo "::error::Expected exactly one temporary ${ARTIFACT_NAME} artifact, found ${#artifact_ids[@]}."
-            exit 1
-          fi
-          gh api --method DELETE \
-            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_ids[0]}"
 
   stage:
     name: Deploy staging and run live browser E2E
     needs: publish
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, ARM64, personal-brand, linux-arm64]
     timeout-minutes: 50
     environment: staging
     permissions:
