@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 const originalFetch = globalThis.fetch;
 
-async function fetchGithubActivity(username: string) {
+async function fetchGithubActivity(username: string, token?: string) {
   process.env.TURSO_DATABASE_URL ??= "file::memory:";
   const github = await import("../../backend/github");
-  return github.fetchGithubActivity(username);
+  return github.fetchGithubActivity(username, token);
 }
 
 after(() => {
@@ -87,4 +87,40 @@ test("GitHub REST errors expose status context without leaking response bodies",
       && /403 Forbidden/.test(error.message)
       && !error.message.includes("sensitive provider body"),
   );
+});
+
+test("token-backed activity uses public REST and only the real minimal calendar query", async () => {
+  let authenticatedRequests = 0;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input); const headers = new Headers(init?.headers);
+    assert.equal(init?.redirect, "error"); assert.ok(init?.signal);
+    if (url.endsWith("/graphql")) {
+      authenticatedRequests++;
+      assert.equal(headers.get("Authorization"), "Bearer test-calendar-only-token");
+      const payload = JSON.parse(String(init?.body));
+      assert.doesNotMatch(payload.query, /pullRequests|repositories|followers/);
+      assert.equal(payload.variables.login, "matt2jog");
+      return Response.json({data: {user: {login: "matt2jog", pullRequests: {nodes: [{title: "must-not-copy-private-extra"}]}, contributionsCollection: {
+        contributionCalendar: {totalContributions: 7, weeks: [{contributionDays: [{contributionCount: 7, date: "2026-10-12"}]}]},
+      }}}});
+    }
+    assert.equal(headers.get("Authorization"), null);
+    if (url.endsWith("/users/matt2jog")) return Response.json({login: "matt2jog", name: "Matthew", followers: 4, public_repos: 0});
+    return Response.json([]);
+  }) as typeof fetch;
+  const activity = await fetchGithubActivity("matt2jog", "test-calendar-only-token");
+  assert.equal(authenticatedRequests, 1);
+  assert.equal(activity.contributionsCollection.contributionCalendar.totalContributions, 7);
+  assert.equal(activity.pullRequests.nodes.length, 0);
+  assert.ok(!JSON.stringify(activity).includes("must-not-copy-private-extra"));
+});
+
+test("a failed authenticated calendar never becomes manufactured empty success", async () => {
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input).endsWith("/graphql")) return Response.json({errors: [{message: "sensitive-provider-detail"}]});
+    if (String(input).endsWith("/users/matt2jog")) return Response.json({login: "matt2jog", followers: 0, public_repos: 0});
+    return Response.json([]);
+  }) as typeof fetch;
+  await assert.rejects(() => fetchGithubActivity("matt2jog", "test-calendar-only-token"), error =>
+    error instanceof Error && error.message === "GitHub contribution calendar unavailable");
 });
