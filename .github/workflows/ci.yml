@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify Mac runner and exact local image handoff
-        run: node --test .github/scripts/actions-local-image-handoff.test.mjs
+        run: node --test .github/scripts/actions-local-image-handoff.test.mjs .github/scripts/release-recovery-guards.test.mjs
 
       - name: Verify task-end reconciliation hook
         shell: bash

@@ -102,6 +102,16 @@ jobs:
             <<<"${prod_json}")" == "1" ]]
           previous_revision="$(jq -er '.status.traffic[] | select(.percent == 100 and .revisionName != null) | .revisionName' \
             <<<"${prod_json}")"
+          previous_image="$(gcloud run revisions describe "${previous_revision}" \
+            --project "${GCP_PROJECT_ID}" --region "${GCP_REGION}" \
+            --format='value(spec.containers[0].image)')"
+          [[ "${previous_image}" == "${IMAGE_URI}@sha256:"* ]]
+          previous_digest="$(gcloud artifacts docker images describe "${previous_image}" \
+            --project "${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
+          if [[ "${previous_image}" != "${IMAGE_URI}@${previous_digest}" ]]; then
+            echo "::error::The prior serving image is unavailable for verified rollback; do not mutate production."
+            exit 1
+          fi
           service_name="projects/${GCP_PROJECT_ID}/locations/${GCP_REGION}/services/${PROD_SERVICE}"
           service_endpoint="https://run.googleapis.com/v2/${service_name}"
           access_token="$(gcloud auth print-access-token)"
@@ -238,6 +248,17 @@ jobs:
             --retry 8 --retry-all-errors --retry-delay 3 --retry-max-time 120 \
             "${candidate_url}/health")"
           [[ "$(jq -r '.release_sha' <<<"${candidate_health}")" == "${COMMIT_SHA}" ]]
+
+          # Test production integration values before moving public traffic.
+          candidate_activity="$(curl --fail --silent --show-error \
+            --connect-timeout 5 --max-time 30 --retry 3 --retry-all-errors --retry-delay 2 \
+            "${candidate_url}/api/public/github/activity")"
+          jq -e '
+            (.login | type == "string" and length > 0) and
+            (.contributionsCollection.contributionCalendar.weeks | type == "array" and length > 0 and
+              all(.[]; (.contributionDays | type == "array" and length > 0)))
+          ' <<<"${candidate_activity}" >/dev/null
+          candidate_activity=
 
           shifted=1
           gcloud run services update-traffic "${PROD_SERVICE}" \
