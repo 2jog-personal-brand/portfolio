@@ -10,13 +10,14 @@ test('direct federation publication stays private, bounded and exact-image verif
     'umask 077', 'portfolio-publish-docker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
     'portfolio-publish-gcloud-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}',
     'timeout 180s docker push', 'timeout 240s docker push',
-    'timeout 180s docker pull "${PUBLISHED_DIGEST_URI}"',
+    'timeout 60s docker buildx imagetools inspect "${PUBLISHED_DIGEST_URI}"',
     'docker tag "${VERIFIED_IMAGE_ID}"',
     '[[ "${resolved_digest}" == "${digest}" ]]',
-    '[[ "${remote_release_sha}" != "${COMMIT_SHA}" ]]',
+    'node .github/scripts/verify-published-manifest.mjs',
     'authentication failed|unauthorized|token.*expired',
   ]) assert.ok(publish.includes(required), required);
   assert.doesNotMatch(publish, /service_account:|continue-on-error:|actions\/(upload|download)-artifact@/);
+  assert.doesNotMatch(publish, /docker pull/);
   assert.ok(publish.indexOf('Refresh direct federation immediately before publication') < publish.indexOf('Publish the verified SHA image'));
   assert.ok(publish.indexOf('Refresh direct federation for independent read-back') < publish.indexOf('Verify exact published digest'));
   assert.ok(publish.includes('gcloud artifacts docker images describe "${remote_image}"'));
