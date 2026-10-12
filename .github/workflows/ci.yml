@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Verify Mac runner and exact local image handoff
-        run: node --test .github/scripts/actions-local-image-handoff.test.mjs .github/scripts/release-recovery-guards.test.mjs
+        run: node --test .github/scripts/actions-local-image-handoff.test.mjs .github/scripts/release-recovery-guards.test.mjs .github/scripts/publisher-federation.test.mjs
 
       - name: Verify task-end reconciliation hook
         shell: bash
@@ -273,6 +273,17 @@ jobs:
     outputs:
       digest_uri: ${{ steps.image.outputs.digest_uri }}
     steps:
+      - name: Isolate publisher credentials from other runner jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          docker_config="${RUNNER_TEMP}/portfolio-publish-docker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cloudsdk_config="${RUNNER_TEMP}/portfolio-publish-gcloud-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -- "${docker_config}" "${cloudsdk_config}"
+          printf 'DOCKER_CONFIG=%s\n' "${docker_config}" >> "${GITHUB_ENV}"
+          printf 'CLOUDSDK_CONFIG=%s\n' "${cloudsdk_config}" >> "${GITHUB_ENV}"
+
       - name: Require exact verified runner-local image
         shell: bash
         env:
@@ -291,6 +302,40 @@ jobs:
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+
+      - name: Refresh direct federation for bounded upload priming
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+
+      - name: Prime exact verified layers within one federation window
+        shell: bash
+        env:
+          VERIFIED_IMAGE_ID: ${{ needs.verify.outputs.verified_image_id }}
+        run: |
+          set -euo pipefail
+          remote="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}"
+          [[ "${VERIFIED_IMAGE_ID}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')" == "${VERIFIED_IMAGE_ID}" ]]
+          [[ "$(docker image inspect "${VERIFIED_IMAGE_ID}" --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')" == "${COMMIT_SHA}" ]]
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          if ! gcloud artifacts docker images describe "${remote}" --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+            docker tag "${VERIFIED_IMAGE_ID}" "${remote}"
+            set +e
+            timeout 180s docker push "${remote}" >"${RUNNER_TEMP}/portfolio-prime.log" 2>&1
+            prime_status=$?
+            set -e
+            if [[ "${prime_status}" != 0 && "${prime_status}" != 124 ]]; then
+              grep -Eqi 'authentication failed|unauthorized|token.*expired' "${RUNNER_TEMP}/portfolio-prime.log" || exit "${prime_status}"
+            fi
+          fi
+
+      - name: Refresh direct federation immediately before publication
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
 
       - name: Publish the verified SHA image
         id: image
@@ -315,25 +360,48 @@ jobs:
             [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           else
             docker tag "${VERIFIED_IMAGE_ID}" "${remote_image}"
-            docker push "${remote_image}"
+            timeout 240s docker push "${remote_image}"
             digest="$(gcloud artifacts docker images describe "${remote_image}" \
               --project "${GCP_PROJECT_ID}" \
               --format='value(image_summary.digest)')"
             [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           fi
-          docker pull "${remote_image}" >/dev/null
-          remote_image_id="$(docker image inspect "${remote_image}" --format='{{.Id}}')"
+          echo "digest_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Refresh direct federation for independent read-back
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+
+      - name: Verify exact published digest and immutable source tag
+        shell: bash
+        env:
+          VERIFIED_IMAGE_ID: ${{ needs.verify.outputs.verified_image_id }}
+          PUBLISHED_DIGEST_URI: ${{ steps.image.outputs.digest_uri }}
+        run: |
+          set -euo pipefail
+          image_uri="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}"
+          remote_image="${image_uri}:${COMMIT_SHA}"
+          digest="${PUBLISHED_DIGEST_URI##*@}"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${PUBLISHED_DIGEST_URI}" == "${image_uri}@${digest}" ]]
+          local_image_id="$(docker image inspect "${LOCAL_IMAGE}" --format='{{.Id}}')"
+          [[ "${local_image_id}" == "${VERIFIED_IMAGE_ID}" ]]
+          gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+          timeout 180s docker pull "${PUBLISHED_DIGEST_URI}" >/dev/null
+          remote_image_id="$(docker image inspect "${PUBLISHED_DIGEST_URI}" --format='{{.Id}}')"
           if [[ "${remote_image_id}" != "${local_image_id}" ]]; then
             echo "::error::The immutable commit tag ${COMMIT_SHA} does not match the image that passed verification."
             exit 1
           fi
-          remote_revision="$(docker image inspect "${remote_image}" \
+          remote_revision="$(docker image inspect "${PUBLISHED_DIGEST_URI}" \
             --format='{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
           if [[ "${remote_revision}" != "${COMMIT_SHA}" ]]; then
             echo "::error::The immutable commit tag ${COMMIT_SHA} does not carry its exact OCI revision label."
             exit 1
           fi
-          remote_release_sha="$(docker image inspect "${remote_image}" \
+          remote_release_sha="$(docker image inspect "${PUBLISHED_DIGEST_URI}" \
             --format='{{ range .Config.Env }}{{ println . }}{{ end }}' \
             | sed -n 's/^PORTFOLIO_RELEASE_SHA=//p')"
           if [[ "${remote_release_sha}" != "${COMMIT_SHA}" ]]; then
@@ -344,7 +412,6 @@ jobs:
             --project "${GCP_PROJECT_ID}" \
             --format='value(image_summary.digest)')"
           [[ "${resolved_digest}" == "${digest}" ]]
-          echo "digest_uri=${image_uri}@${digest}" >> "${GITHUB_OUTPUT}"
 
 
   stage:
